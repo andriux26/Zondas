@@ -33,8 +33,9 @@ jobs:
         run: pip install --disable-pip-version-check platformio
 
       - name: Add browser-assisted OTA endpoint
-        shell: python
+        shell: bash
         run: |
+          python <<'PY'
           from pathlib import Path
 
           p = Path('RX_FSK/RX_FSK.ino')
@@ -44,60 +45,64 @@ jobs:
               raise SystemExit('SetupAsyncServer marker not found')
 
           ota_code = r'''
-  server.on("/api/firmware-update", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-      const bool ok = !Update.hasError();
-      AsyncWebServerResponse *response = request->beginResponse(
-        ok ? 200 : 500,
-        "application/json",
-        ok ? "{\"ok\":true,\"message\":\"Firmware written\"}" : "{\"ok\":false,\"message\":\"Firmware update failed\"}"
-      );
-      response->addHeader("Connection", "close");
-      request->send(response);
-      if (ok) {
-        delay(500);
-        ESP.restart();
-      }
-    },
-    [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-      if (index == 0) {
-        LOG_I(TAG, "Browser OTA start: %s\n", filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
-          Update.printError(Serial);
-          return;
-        }
-      }
+          server.on("/api/firmware-update", HTTP_POST,
+            [](AsyncWebServerRequest *request) {
+              const bool ok = !Update.hasError();
+              AsyncWebServerResponse *response = request->beginResponse(
+                ok ? 200 : 500,
+                "application/json",
+                ok ? "{\"ok\":true,\"message\":\"Firmware written\"}" : "{\"ok\":false,\"message\":\"Firmware update failed\"}"
+              );
+              response->addHeader("Connection", "close");
+              request->send(response);
+              if (ok) {
+                delay(500);
+                ESP.restart();
+              }
+            },
+            [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+              if (index == 0) {
+                LOG_I(TAG, "Browser OTA start: %s\n", filename.c_str());
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+                  Update.printError(Serial);
+                  return;
+                }
+              }
 
-      if (!Update.hasError() && len > 0) {
-        const size_t written = Update.write(data, len);
-        if (written != len) {
-          Update.printError(Serial);
-        }
-      }
+              if (!Update.hasError() && len > 0) {
+                const size_t written = Update.write(data, len);
+                if (written != len) {
+                  Update.printError(Serial);
+                }
+              }
 
-      if (final) {
-        if (!Update.end(true)) {
-          Update.printError(Serial);
-        } else {
-          LOG_I(TAG, "Browser OTA complete: %u bytes\n", index + len);
-        }
-      }
-    }
-  );
-'''
+              if (final) {
+                if (!Update.end(true)) {
+                  Update.printError(Serial);
+                } else {
+                  LOG_I(TAG, "Browser OTA complete: %u bytes\n", index + len);
+                }
+              }
+            }
+          );
+          '''
 
           if '/api/firmware-update' not in s:
               s = s.replace(marker, marker + ota_code, 1)
           p.write_text(s, encoding='utf-8')
+          PY
 
       - name: Build firmware
         run: pio run -e ttgo-lora32 -t firmware
 
       - name: Prepare compiled files and version manifest
-        shell: python
+        shell: bash
         run: |
+          python <<'PY'
           from pathlib import Path
-          import json, re, shutil
+          import json
+          import re
+          import shutil
           from datetime import datetime, timezone
 
           build = Path('.pio/build/ttgo-lora32')
@@ -108,9 +113,15 @@ jobs:
                   raise SystemExit(f'Missing build file: {path}')
 
           version_text = Path('RX_FSK/version.h').read_text(encoding='utf-8')
-          version_id = re.search(r'version_id\s*=\s*"([^"]+)"', version_text).group(1)
-          fs_major = int(re.search(r'FS_MAJOR\s*=\s*(\d+)', version_text).group(1))
-          fs_minor = int(re.search(r'FS_MINOR\s*=\s*(\d+)', version_text).group(1))
+          version_match = re.search(r'version_id\s*=\s*"([^"]+)"', version_text)
+          major_match = re.search(r'FS_MAJOR\s*=\s*(\d+)', version_text)
+          minor_match = re.search(r'FS_MINOR\s*=\s*(\d+)', version_text)
+          if not version_match or not major_match or not minor_match:
+              raise SystemExit('Could not read version from RX_FSK/version.h')
+
+          version_id = version_match.group(1)
+          fs_major = int(major_match.group(1))
+          fs_minor = int(minor_match.group(1))
           full_version = f'{version_id}-{chr(64 + fs_major)}{fs_minor}'
           build_date = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
@@ -143,6 +154,7 @@ jobs:
               encoding='utf-8'
           )
           (docs / '.nojekyll').touch()
+          PY
 
       - name: Save compiled firmware in repository
         shell: bash
