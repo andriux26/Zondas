@@ -8,6 +8,7 @@ on:
       - 'docs/*.bin'
       - 'docs/update-info.html'
       - 'docs/version.json'
+      - 'docs/manifest.json'
   workflow_dispatch:
 
 permissions:
@@ -95,7 +96,7 @@ jobs:
       - name: Build firmware
         run: pio run -e ttgo-lora32 -t firmware
 
-      - name: Prepare compiled files and version manifest
+      - name: Prepare compiled files and manifests
         shell: bash
         run: |
           python <<'PY'
@@ -140,15 +141,37 @@ jobs:
               shutil.copy2(build / source, firmware / target)
               shutil.copy2(build / source, docs / target)
 
-          info = {
+          version_info = {
               'version': full_version,
               'build_date': build_date,
               'firmware': 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.ino.bin',
               'filesystem': 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.fs.bin',
           }
-          manifest = json.dumps(info, ensure_ascii=False, indent=2) + '\n'
-          (firmware / 'version.json').write_text(manifest, encoding='utf-8')
-          (docs / 'version.json').write_text(manifest, encoding='utf-8')
+          version_json = json.dumps(version_info, ensure_ascii=False, indent=2) + '\n'
+          (firmware / 'version.json').write_text(version_json, encoding='utf-8')
+          (docs / 'version.json').write_text(version_json, encoding='utf-8')
+
+          web_manifest = {
+              'name': 'Zondas TTGO LoRa32',
+              'version': full_version,
+              'new_install_prompt_erase': True,
+              'builds': [
+                  {
+                      'chipFamily': 'ESP32',
+                      'parts': [
+                          {
+                              'path': 'firmware-image.bin',
+                              'offset': 4096,
+                          }
+                      ],
+                  }
+              ],
+          }
+          (docs / 'manifest.json').write_text(
+              json.dumps(web_manifest, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8'
+          )
+
           (docs / 'update-info.html').write_text(
               f'<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Versija: {full_version}<br>Sukurta: {build_date}<br>',
               encoding='utf-8'
