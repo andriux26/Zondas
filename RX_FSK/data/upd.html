@@ -17,7 +17,7 @@
 </head>
 <body>
   <div class="ota-box">
-    <h2>Zondas programinės įrangos atnaujinimas</h2>
+    <h2>Zondas pilnas atnaujinimas</h2>
 
     <div class="ota-row"><span>Įdiegta versija</span><strong id="installedVersion">%FULLNAMEID%</strong></div>
     <div class="ota-row"><span>GitHub versija</span><strong id="remoteVersion">Tikrinama...</strong></div>
@@ -25,11 +25,11 @@
 
     <div id="status" class="ota-status">Tikrinama, ar yra nauja versija...</div>
 
-    <button id="updateButton" class="ota-button" type="button" disabled>Atsisiųsti ir įdiegti</button>
+    <button id="updateButton" class="ota-button" type="button" disabled>Atnaujinti programą ir web puslapius</button>
     <progress id="progress" value="0" max="100" hidden></progress>
     <div id="progressText" class="small"></div>
 
-    <p class="small">Firmware atsisiunčiamas iš tavo GitHub repozitorijos ir naršyklės perduodamas tiesiai šiam ESP32.</p>
+    <p class="small">Vienu paspaudimu atnaujinami LittleFS web failai ir pati ESP32 programa. Atnaujinimo metu neišjunk ESP.</p>
   </div>
 
 <script>
@@ -44,6 +44,7 @@
 
   const base = 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/';
   let firmwareUrl = base + 'update.ino.bin';
+  let filesystemUrl = base + 'update.fs.bin';
 
   function setStatus(text) {
     statusEl.textContent = text;
@@ -60,12 +61,13 @@
       remoteEl.textContent = remote;
       dateEl.textContent = info.build_date || '–';
       if (info.firmware) firmwareUrl = info.firmware;
+      if (info.filesystem) filesystemUrl = info.filesystem;
 
       if (remote === installed) {
         setStatus('Naujausia versija jau įdiegta.');
         button.disabled = true;
       } else {
-        setStatus('Yra nauja versija. Galima atnaujinti.');
+        setStatus('Yra nauja versija. Bus atnaujinta programa ir web puslapiai.');
         button.disabled = false;
       }
     } catch (error) {
@@ -75,45 +77,59 @@
     }
   }
 
+  async function downloadFile(url, title, minimumSize) {
+    progressText.textContent = 'Atsisiunčiamas ' + title + ' iš GitHub...';
+    const response = await fetch(url + '?t=' + Date.now(), {cache:'no-store'});
+    if (!response.ok) throw new Error(title + ' HTTP ' + response.status);
+    const blob = await response.blob();
+    if (blob.size < minimumSize) throw new Error(title + ' failas per mažas: ' + blob.size + ' B');
+    return blob;
+  }
+
+  function uploadFile(endpoint, field, filename, blob, startPercent, endPercent, title) {
+    return new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append(field, blob, filename);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', endpoint, true);
+      xhr.upload.onprogress = event => {
+        if (event.lengthComputable) {
+          const ratio = event.loaded / event.total;
+          progress.value = startPercent + Math.round(ratio * (endPercent - startPercent));
+          progressText.textContent = title + ': ' + Math.round(event.loaded/1024) + ' / ' + Math.round(event.total/1024) + ' KB';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(xhr.responseText || ('ESP HTTP ' + xhr.status)));
+      };
+      xhr.onerror = () => reject(new Error('Ryšys su ESP nutrūko įrašant ' + title));
+      xhr.send(form);
+    });
+  }
+
   async function installUpdate() {
     button.disabled = true;
     progress.hidden = false;
     progress.value = 0;
-    progressText.textContent = 'Atsisiunčiamas firmware iš GitHub...';
     setStatus('Neišjunk ESP ir neuždaryk šio puslapio.');
 
     try {
-      const response = await fetch(firmwareUrl + '?t=' + Date.now(), {cache:'no-store'});
-      if (!response.ok) throw new Error('Firmware HTTP ' + response.status);
-      const blob = await response.blob();
-      if (blob.size < 100000) throw new Error('Firmware failas per mažas: ' + blob.size + ' B');
-
+      const filesystemBlob = await downloadFile(filesystemUrl, 'web failai', 10000);
+      progress.value = 5;
+      const firmwareBlob = await downloadFile(firmwareUrl, 'firmware', 100000);
       progress.value = 10;
-      progressText.textContent = 'Firmware gautas (' + Math.round(blob.size/1024) + ' KB). Perduodamas į ESP...';
 
-      const form = new FormData();
-      form.append('firmware', blob, 'update.ino.bin');
+      progressText.textContent = 'Įrašomi web puslapiai...';
+      await uploadFile('/api/filesystem-update', 'filesystem', 'update.fs.bin', filesystemBlob, 10, 50, 'Web failai');
 
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/firmware-update', true);
-        xhr.upload.onprogress = event => {
-          if (event.lengthComputable) {
-            const percent = 10 + Math.round((event.loaded / event.total) * 85);
-            progress.value = percent;
-            progressText.textContent = 'Įrašoma į ESP: ' + Math.round(event.loaded/1024) + ' / ' + Math.round(event.total/1024) + ' KB';
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(xhr.responseText || ('ESP HTTP ' + xhr.status)));
-        };
-        xhr.onerror = () => reject(new Error('Ryšys su ESP nutrūko'));
-        xhr.send(form);
-      });
+      progress.value = 50;
+      progressText.textContent = 'Web puslapiai įrašyti. Įrašoma programa...';
+      await uploadFile('/api/firmware-update', 'firmware', 'update.ino.bin', firmwareBlob, 50, 98, 'Firmware');
 
       progress.value = 100;
-      progressText.textContent = 'Atnaujinimas įrašytas. ESP persikrauna...';
+      progressText.textContent = 'Abu failai įrašyti. ESP persikrauna...';
       setStatus('Atnaujinimas baigtas. Po kelių sekundžių atnaujink puslapį.');
     } catch (error) {
       setStatus('Atnaujinimo klaida: ' + error.message);
