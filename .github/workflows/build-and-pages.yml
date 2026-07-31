@@ -40,12 +40,12 @@ jobs:
           s = p.read_text(encoding='utf-8')
 
           replacements = {
-            '#include <WiFi.h>': '#include <WiFi.h>\n#include <WiFiClientSecure.h>',
+            '#include <WiFi.h>': '#include <WiFi.h>\n#include <NetworkClientSecure.h>',
             'const char *updateHost = "rdzsonde.mooo.com";': 'const char *updateHost = "andriux26.github.io";',
             'int updatePort = 80;': 'int updatePort = 443;',
             'const char *updatePrefixM = "/main/";': 'const char *updatePrefixM = "/Zondas/";',
             'const char *updatePrefixD = "/dev2/";': 'const char *updatePrefixD = "/Zondas/";',
-            'WiFiClient client;': 'class ZondasUpdateClient : public WiFiClientSecure { public: ZondasUpdateClient() { setInsecure(); } };\nZondasUpdateClient client;',
+            'WiFiClient client;': 'class ZondasUpdateClient : public NetworkClientSecure { public: ZondasUpdateClient() { setInsecure(); } };\nZondasUpdateClient client;',
             'http://rdzsonde.mooo.com/main/update-info.html': 'https://andriux26.github.io/Zondas/update-info.html',
             'http://rdzsonde.mooo.com/dev2/update-info.html': 'https://andriux26.github.io/Zondas/update-info.html',
           }
