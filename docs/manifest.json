@@ -1,6 +1,6 @@
 {
-  "name": "RDZ TTGO Sonde",
-  "version": "dev2",
+  "name": "Zondas TTGO LoRa32",
+  "version": "dev2026-C3",
   "new_install_prompt_erase": true,
   "builds": [
     {
