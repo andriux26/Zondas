@@ -7,6 +7,7 @@ on:
       - 'Firmware/**'
       - 'docs/*.bin'
       - 'docs/update-info.html'
+      - 'docs/version.json'
   workflow_dispatch:
 
 permissions:
@@ -31,32 +32,117 @@ jobs:
       - name: Install PlatformIO
         run: pip install --disable-pip-version-check platformio
 
-      - name: Build original firmware
+      - name: Add browser-assisted OTA endpoint
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('RX_FSK/RX_FSK.ino')
+          s = p.read_text(encoding='utf-8')
+          marker = '  server.reset();\n'
+          if marker not in s:
+              raise SystemExit('SetupAsyncServer marker not found')
+
+          ota_code = r'''
+  server.on("/api/firmware-update", HTTP_POST,
+    [](AsyncWebServerRequest *request) {
+      const bool ok = !Update.hasError();
+      AsyncWebServerResponse *response = request->beginResponse(
+        ok ? 200 : 500,
+        "application/json",
+        ok ? "{\"ok\":true,\"message\":\"Firmware written\"}" : "{\"ok\":false,\"message\":\"Firmware update failed\"}"
+      );
+      response->addHeader("Connection", "close");
+      request->send(response);
+      if (ok) {
+        delay(500);
+        ESP.restart();
+      }
+    },
+    [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+      if (index == 0) {
+        LOG_I(TAG, "Browser OTA start: %s\n", filename.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+          Update.printError(Serial);
+          return;
+        }
+      }
+
+      if (!Update.hasError() && len > 0) {
+        const size_t written = Update.write(data, len);
+        if (written != len) {
+          Update.printError(Serial);
+        }
+      }
+
+      if (final) {
+        if (!Update.end(true)) {
+          Update.printError(Serial);
+        } else {
+          LOG_I(TAG, "Browser OTA complete: %u bytes\n", index + len);
+        }
+      }
+    }
+  );
+'''
+
+          if '/api/firmware-update' not in s:
+              s = s.replace(marker, marker + ota_code, 1)
+          p.write_text(s, encoding='utf-8')
+
+      - name: Build firmware
         run: pio run -e ttgo-lora32 -t firmware
 
-      - name: Prepare compiled files
-        shell: bash
+      - name: Prepare compiled files and version manifest
+        shell: python
         run: |
-          set -euxo pipefail
-          BUILD=.pio/build/ttgo-lora32
-          test -s "$BUILD/firmware-image.bin"
-          test -s "$BUILD/firmware.bin"
-          test -s "$BUILD/littlefs.bin"
-          test -s "$BUILD/fonts.bin"
+          from pathlib import Path
+          import json, re, shutil
+          from datetime import datetime, timezone
 
-          mkdir -p Firmware docs
-          cp "$BUILD/firmware-image.bin" Firmware/firmware-image.bin
-          cp "$BUILD/firmware.bin" Firmware/update.ino.bin
-          cp "$BUILD/littlefs.bin" Firmware/update.fs.bin
-          cp "$BUILD/fonts.bin" Firmware/fonts.bin
+          build = Path('.pio/build/ttgo-lora32')
+          required = ['firmware-image.bin', 'firmware.bin', 'littlefs.bin', 'fonts.bin']
+          for name in required:
+              path = build / name
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'Missing build file: {path}')
 
-          cp Firmware/firmware-image.bin docs/firmware-image.bin
-          cp Firmware/update.ino.bin docs/update.ino.bin
-          cp Firmware/update.fs.bin docs/update.fs.bin
-          cp Firmware/fonts.bin docs/fonts.bin
-          printf '<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Build: %s<br>Commit: %.7s<br>' "$(date -u +'%Y-%m-%d %H:%M UTC')" "$GITHUB_SHA" > docs/update-info.html
-          touch docs/.nojekyll
-          ls -lh Firmware docs
+          version_text = Path('RX_FSK/version.h').read_text(encoding='utf-8')
+          version_id = re.search(r'version_id\s*=\s*"([^"]+)"', version_text).group(1)
+          fs_major = int(re.search(r'FS_MAJOR\s*=\s*(\d+)', version_text).group(1))
+          fs_minor = int(re.search(r'FS_MINOR\s*=\s*(\d+)', version_text).group(1))
+          full_version = f'{version_id}-{chr(64 + fs_major)}{fs_minor}'
+          build_date = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+          firmware = Path('Firmware')
+          docs = Path('docs')
+          firmware.mkdir(exist_ok=True)
+          docs.mkdir(exist_ok=True)
+
+          files = {
+              'firmware-image.bin': 'firmware-image.bin',
+              'firmware.bin': 'update.ino.bin',
+              'littlefs.bin': 'update.fs.bin',
+              'fonts.bin': 'fonts.bin',
+          }
+          for source, target in files.items():
+              shutil.copy2(build / source, firmware / target)
+              shutil.copy2(build / source, docs / target)
+
+          info = {
+              'version': full_version,
+              'build_date': build_date,
+              'firmware': 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.ino.bin',
+              'filesystem': 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.fs.bin',
+          }
+          manifest = json.dumps(info, ensure_ascii=False, indent=2) + '\n'
+          (firmware / 'version.json').write_text(manifest, encoding='utf-8')
+          (docs / 'version.json').write_text(manifest, encoding='utf-8')
+          (docs / 'update-info.html').write_text(
+              f'<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Versija: {full_version}<br>Sukurta: {build_date}<br>',
+              encoding='utf-8'
+          )
+          (docs / '.nojekyll').touch()
 
       - name: Save compiled firmware in repository
         shell: bash
