@@ -4,34 +4,127 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" type="text/css" href="style.css">
-  <title>Andriuxa OTA atnaujinimas</title>
+  <title>Zondas atnaujinimas</title>
+  <style>
+    .ota-box{max-width:620px;margin:24px auto;padding:20px;border:1px solid #aaa;border-radius:12px}
+    .ota-row{display:flex;justify-content:space-between;gap:15px;padding:8px 0;border-bottom:1px solid #ddd}
+    .ota-status{margin:18px 0;padding:12px;border-radius:8px;background:#eee}
+    .ota-button{width:100%;padding:14px;font-size:17px;cursor:pointer}
+    .ota-button:disabled{opacity:.55;cursor:not-allowed}
+    progress{width:100%;height:24px;margin-top:12px}
+    .small{font-size:13px;opacity:.8;word-break:break-all}
+  </style>
 </head>
 <body>
-  <form action="update.html" method="post">
-    <p>Dabar įdiegta: <strong>%FULLNAMEID%</strong></p>
-    <p>Naujausia tavo GitHub versija: <strong id="develDiv">tikrinama...</strong></p>
-    <input type="submit" name="dev2" value="Atnaujinti iš Andriuxa GitHub">
-  </form>
+  <div class="ota-box">
+    <h2>Zondas programinės įrangos atnaujinimas</h2>
 
-  <p>Atnaujinimas atsisiunčia tik iš:</p>
-  <p><tt>https://andriux26.github.io/rdz_ttgo_sonde/</tt></p>
-  <p>Bus atnaujinta interneto sąsaja ir pati ESP32 programa.</p>
+    <div class="ota-row"><span>Įdiegta versija</span><strong id="installedVersion">%FULLNAMEID%</strong></div>
+    <div class="ota-row"><span>GitHub versija</span><strong id="remoteVersion">Tikrinama...</strong></div>
+    <div class="ota-row"><span>Sukurta</span><strong id="buildDate">–</strong></div>
 
-  <script>
-    const develInfo = document.getElementById('develDiv');
-    const versionUrl = 'https://andriux26.github.io/rdz_ttgo_sonde/update-info.html?t=' + Date.now();
+    <div id="status" class="ota-status">Tikrinama, ar yra nauja versija...</div>
 
-    fetch(versionUrl, { cache: 'no-store' })
-      .then(response => {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        return response.text();
-      })
-      .then(text => {
-        develInfo.textContent = text.replace(/<[^>]*>/g, '').trim();
-      })
-      .catch(error => {
-        develInfo.textContent = 'nepavyko patikrinti: ' + error.message;
+    <button id="updateButton" class="ota-button" type="button" disabled>Atsisiųsti ir įdiegti</button>
+    <progress id="progress" value="0" max="100" hidden></progress>
+    <div id="progressText" class="small"></div>
+
+    <p class="small">Firmware atsisiunčiamas iš tavo GitHub repozitorijos ir naršyklės perduodamas tiesiai šiam ESP32.</p>
+  </div>
+
+<script>
+(() => {
+  const installed = document.getElementById('installedVersion').textContent.trim();
+  const remoteEl = document.getElementById('remoteVersion');
+  const dateEl = document.getElementById('buildDate');
+  const statusEl = document.getElementById('status');
+  const button = document.getElementById('updateButton');
+  const progress = document.getElementById('progress');
+  const progressText = document.getElementById('progressText');
+
+  const base = 'https://raw.githubusercontent.com/andriux26/Zondas/main/docs/';
+  let firmwareUrl = base + 'update.ino.bin';
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  async function checkVersion() {
+    try {
+      const response = await fetch(base + 'version.json?t=' + Date.now(), {cache:'no-store'});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const info = await response.json();
+      const remote = String(info.version || '').trim();
+      if (!remote) throw new Error('version.json neturi versijos');
+
+      remoteEl.textContent = remote;
+      dateEl.textContent = info.build_date || '–';
+      if (info.firmware) firmwareUrl = info.firmware;
+
+      if (remote === installed) {
+        setStatus('Naujausia versija jau įdiegta.');
+        button.disabled = true;
+      } else {
+        setStatus('Yra nauja versija. Galima atnaujinti.');
+        button.disabled = false;
+      }
+    } catch (error) {
+      remoteEl.textContent = 'Nepavyko patikrinti';
+      setStatus('Versijos patikrinimo klaida: ' + error.message);
+      button.disabled = true;
+    }
+  }
+
+  async function installUpdate() {
+    button.disabled = true;
+    progress.hidden = false;
+    progress.value = 0;
+    progressText.textContent = 'Atsisiunčiamas firmware iš GitHub...';
+    setStatus('Neišjunk ESP ir neuždaryk šio puslapio.');
+
+    try {
+      const response = await fetch(firmwareUrl + '?t=' + Date.now(), {cache:'no-store'});
+      if (!response.ok) throw new Error('Firmware HTTP ' + response.status);
+      const blob = await response.blob();
+      if (blob.size < 100000) throw new Error('Firmware failas per mažas: ' + blob.size + ' B');
+
+      progress.value = 10;
+      progressText.textContent = 'Firmware gautas (' + Math.round(blob.size/1024) + ' KB). Perduodamas į ESP...';
+
+      const form = new FormData();
+      form.append('firmware', blob, 'update.ino.bin');
+
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/firmware-update', true);
+        xhr.upload.onprogress = event => {
+          if (event.lengthComputable) {
+            const percent = 10 + Math.round((event.loaded / event.total) * 85);
+            progress.value = percent;
+            progressText.textContent = 'Įrašoma į ESP: ' + Math.round(event.loaded/1024) + ' / ' + Math.round(event.total/1024) + ' KB';
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(xhr.responseText || ('ESP HTTP ' + xhr.status)));
+        };
+        xhr.onerror = () => reject(new Error('Ryšys su ESP nutrūko'));
+        xhr.send(form);
       });
-  </script>
+
+      progress.value = 100;
+      progressText.textContent = 'Atnaujinimas įrašytas. ESP persikrauna...';
+      setStatus('Atnaujinimas baigtas. Po kelių sekundžių atnaujink puslapį.');
+    } catch (error) {
+      setStatus('Atnaujinimo klaida: ' + error.message);
+      progressText.textContent = '';
+      button.disabled = false;
+    }
+  }
+
+  button.addEventListener('click', installUpdate);
+  checkVersion();
+})();
+</script>
 </body>
 </html>
