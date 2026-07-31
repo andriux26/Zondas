@@ -1,0 +1,20 @@
+# Frequency in Mhz (format nnn.nnn)
+# Type (4=RS41, R=RS92, D=DFM (automated normal/inverted), M=M10/M20, 3=MP3H)
+# (older versions: 6=DFM6, 9=DFM9, now both treated the same as D)
+# (older versions: M=M10, 2=M20, now both treaded the same: automated M10/M20 decoding)
+# +: active, -: not active
+#
+402.300 4 + Greifswald
+402.500 4 - Schleswig
+402.700 4 + HH-Sasel
+403.000 4 - DeBilt
+404.100 4 + Norderney
+404.300 4 - Schleswig_2
+404.500 4 - Meppen
+404.700 4 - Greifswald_2
+405.100 4 - Lindenberg
+405.700 4 + Bergen
+405.900 4 + Bergen_2
+405.100 4 + Meppen_2
+405.300 4 - Essen
+# end
