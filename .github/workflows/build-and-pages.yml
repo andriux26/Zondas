@@ -1,4 +1,4 @@
-name: Build firmware and publish Web Flasher
+name: Build firmware
 
 on:
   push:
@@ -11,11 +11,9 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: firmware-build
   cancel-in-progress: true
 
 jobs:
@@ -36,7 +34,7 @@ jobs:
       - name: Build original firmware
         run: pio run -e ttgo-lora32 -t firmware
 
-      - name: Prepare firmware and GitHub Pages files
+      - name: Prepare compiled files
         shell: bash
         run: |
           set -euxo pipefail
@@ -46,27 +44,26 @@ jobs:
           test -s "$BUILD/littlefs.bin"
           test -s "$BUILD/fonts.bin"
 
-          mkdir -p Firmware site
+          mkdir -p Firmware docs
           cp "$BUILD/firmware-image.bin" Firmware/firmware-image.bin
           cp "$BUILD/firmware.bin" Firmware/update.ino.bin
           cp "$BUILD/littlefs.bin" Firmware/update.fs.bin
           cp "$BUILD/fonts.bin" Firmware/fonts.bin
 
-          cp -a docs/. site/
-          cp Firmware/firmware-image.bin site/firmware-image.bin
-          cp Firmware/update.ino.bin site/update.ino.bin
-          cp Firmware/update.fs.bin site/update.fs.bin
-          cp Firmware/fonts.bin site/fonts.bin
-          printf '<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Build: %s<br>Commit: %.7s<br>' "$(date -u +'%Y-%m-%d %H:%M UTC')" "$GITHUB_SHA" > site/update-info.html
-          touch site/.nojekyll
-          ls -lh Firmware site
+          cp Firmware/firmware-image.bin docs/firmware-image.bin
+          cp Firmware/update.ino.bin docs/update.ino.bin
+          cp Firmware/update.fs.bin docs/update.fs.bin
+          cp Firmware/fonts.bin docs/fonts.bin
+          printf '<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Build: %s<br>Commit: %.7s<br>' "$(date -u +'%Y-%m-%d %H:%M UTC')" "$GITHUB_SHA" > docs/update-info.html
+          touch docs/.nojekyll
+          ls -lh Firmware docs
 
       - name: Save compiled firmware in repository
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Firmware
+          git add Firmware docs
           if git diff --cached --quiet; then
             echo "Firmware files unchanged"
           else
@@ -80,24 +77,3 @@ jobs:
           name: Zondas-firmware
           path: Firmware/
           if-no-files-found: error
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
