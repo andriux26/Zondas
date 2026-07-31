@@ -1,0 +1,110 @@
+name: Build firmware and publish Web Flasher
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/*.bin'
+      - 'docs/update-info.html'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --disable-pip-version-check platformio
+
+      - name: Configure firmware for Zondas GitHub OTA
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('RX_FSK/RX_FSK.ino')
+          s = p.read_text(encoding='utf-8')
+
+          replacements = {
+            '#include <WiFi.h>': '#include <WiFi.h>\n#include <WiFiClientSecure.h>',
+            'const char *updateHost = "rdzsonde.mooo.com";': 'const char *updateHost = "andriux26.github.io";',
+            'int updatePort = 80;': 'int updatePort = 443;',
+            'const char *updatePrefixM = "/main/";': 'const char *updatePrefixM = "/Zondas/";',
+            'const char *updatePrefixD = "/dev2/";': 'const char *updatePrefixD = "/Zondas/";',
+            'WiFiClient client;': 'class ZondasUpdateClient : public WiFiClientSecure { public: ZondasUpdateClient() { setInsecure(); } };\nZondasUpdateClient client;',
+            'http://rdzsonde.mooo.com/main/update-info.html': 'https://andriux26.github.io/Zondas/update-info.html',
+            'http://rdzsonde.mooo.com/dev2/update-info.html': 'https://andriux26.github.io/Zondas/update-info.html',
+          }
+          for old, new in replacements.items():
+            if old not in s:
+              raise SystemExit(f'Required source text not found: {old}')
+            s = s.replace(old, new)
+          p.write_text(s, encoding='utf-8')
+
+      - name: Build complete firmware image
+        run: pio run -e ttgo-lora32 -t firmware
+
+      - name: Prepare GitHub Pages files
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BUILD=.pio/build/ttgo-lora32
+          test -s "$BUILD/firmware-image.bin"
+          test -s "$BUILD/firmware.bin"
+          test -s "$BUILD/littlefs.bin"
+          test -s "$BUILD/fonts.bin"
+          mkdir -p site
+          cp -a docs/. site/
+          cp "$BUILD/firmware-image.bin" site/firmware-image.bin
+          cp "$BUILD/firmware.bin" site/update.ino.bin
+          cp "$BUILD/littlefs.bin" site/update.fs.bin
+          cp "$BUILD/fonts.bin" site/fonts.bin
+          printf '<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Build: %s<br>Commit: %.7s<br>' "$(date -u +'%Y-%m-%d %H:%M UTC')" "$GITHUB_SHA" > site/update-info.html
+          touch site/.nojekyll
+          ls -lh site
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zondas-firmware
+          path: |
+            site/firmware-image.bin
+            site/update.ino.bin
+            site/update.fs.bin
+            site/fonts.bin
+          if-no-files-found: error
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
