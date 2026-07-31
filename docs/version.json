@@ -1,6 +1,6 @@
 {
-  "version": "dev2026.11-C3",
-  "build_date": "2026-07-31 09:11 UTC",
+  "version": "dev2026.13-C3",
+  "build_date": "2026-07-31 09:21 UTC",
   "firmware": "https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.ino.bin",
   "filesystem": "https://raw.githubusercontent.com/andriux26/Zondas/main/docs/update.fs.bin"
 }

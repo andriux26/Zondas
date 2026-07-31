@@ -1,6 +1,6 @@
 {
   "name": "Zondas TTGO LoRa32",
-  "version": "dev2026.11-C3",
+  "version": "dev2026.13-C3",
   "new_install_prompt_erase": true,
   "builds": [
     {
