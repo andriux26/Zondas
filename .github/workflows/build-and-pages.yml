@@ -33,6 +33,32 @@ jobs:
       - name: Install PlatformIO
         run: pip install --disable-pip-version-check platformio
 
+      - name: Generate automatic firmware version
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          path = Path('RX_FSK/version.h')
+          text = path.read_text(encoding='utf-8')
+
+          match = re.search(r'(version_id\s*=\s*")([^"]+)("\s*;)', text)
+          if not match:
+              raise SystemExit('version_id not found in RX_FSK/version.h')
+
+          current = match.group(2)
+          base = re.sub(r'\.\d+$', '', current)
+          run_number = os.environ['GITHUB_RUN_NUMBER']
+          automatic_version = f'{base}.{run_number}'
+
+          text = text[:match.start(2)] + automatic_version + text[match.end(2):]
+          path.write_text(text, encoding='utf-8')
+
+          print(f'Firmware version: {automatic_version}')
+          PY
+
       - name: Add browser-assisted OTA endpoint
         shell: bash
         run: |
@@ -177,6 +203,7 @@ jobs:
               encoding='utf-8'
           )
           (docs / '.nojekyll').touch()
+          print(f'Published version: {full_version}')
           PY
 
       - name: Save compiled firmware in repository
