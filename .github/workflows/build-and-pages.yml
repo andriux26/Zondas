@@ -43,35 +43,67 @@ jobs:
 
           path = Path('RX_FSK/version.h')
           text = path.read_text(encoding='utf-8')
-
           match = re.search(r'(version_id\s*=\s*")([^"]+)("\s*;)', text)
           if not match:
               raise SystemExit('version_id not found in RX_FSK/version.h')
 
-          current = match.group(2)
-          base = re.sub(r'\.\d+$', '', current)
-          run_number = os.environ['GITHUB_RUN_NUMBER']
-          automatic_version = f'{base}.{run_number}'
-
+          base = re.sub(r'\.\d+$', '', match.group(2))
+          automatic_version = f"{base}.{os.environ['GITHUB_RUN_NUMBER']}"
           text = text[:match.start(2)] + automatic_version + text[match.end(2):]
           path.write_text(text, encoding='utf-8')
-
           print(f'Firmware version: {automatic_version}')
           PY
 
-      - name: Add browser-assisted OTA endpoint
+      - name: Add browser-assisted OTA endpoints
         shell: bash
         run: |
           python <<'PY'
           from pathlib import Path
 
-          p = Path('RX_FSK/RX_FSK.ino')
-          s = p.read_text(encoding='utf-8')
+          path = Path('RX_FSK/RX_FSK.ino')
+          source = path.read_text(encoding='utf-8')
           marker = '  server.reset();\n'
-          if marker not in s:
+          if marker not in source:
               raise SystemExit('SetupAsyncServer marker not found')
 
           ota_code = r'''
+          server.on("/api/filesystem-update", HTTP_POST,
+            [](AsyncWebServerRequest *request) {
+              const bool ok = !Update.hasError();
+              AsyncWebServerResponse *response = request->beginResponse(
+                ok ? 200 : 500,
+                "application/json",
+                ok ? "{\"ok\":true,\"message\":\"Filesystem written\"}" : "{\"ok\":false,\"message\":\"Filesystem update failed\"}"
+              );
+              response->addHeader("Connection", "close");
+              request->send(response);
+            },
+            [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+              if (index == 0) {
+                LOG_I(TAG, "Browser filesystem OTA start: %s\n", filename.c_str());
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
+                  Update.printError(Serial);
+                  return;
+                }
+              }
+
+              if (!Update.hasError() && len > 0) {
+                const size_t written = Update.write(data, len);
+                if (written != len) {
+                  Update.printError(Serial);
+                }
+              }
+
+              if (final) {
+                if (!Update.end(true)) {
+                  Update.printError(Serial);
+                } else {
+                  LOG_I(TAG, "Browser filesystem OTA complete: %u bytes\n", index + len);
+                }
+              }
+            }
+          );
+
           server.on("/api/firmware-update", HTTP_POST,
             [](AsyncWebServerRequest *request) {
               const bool ok = !Update.hasError();
@@ -83,13 +115,13 @@ jobs:
               response->addHeader("Connection", "close");
               request->send(response);
               if (ok) {
-                delay(500);
+                delay(700);
                 ESP.restart();
               }
             },
             [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
               if (index == 0) {
-                LOG_I(TAG, "Browser OTA start: %s\n", filename.c_str());
+                LOG_I(TAG, "Browser firmware OTA start: %s\n", filename.c_str());
                 if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
                   Update.printError(Serial);
                   return;
@@ -107,16 +139,16 @@ jobs:
                 if (!Update.end(true)) {
                   Update.printError(Serial);
                 } else {
-                  LOG_I(TAG, "Browser OTA complete: %u bytes\n", index + len);
+                  LOG_I(TAG, "Browser firmware OTA complete: %u bytes\n", index + len);
                 }
               }
             }
           );
           '''
 
-          if '/api/firmware-update' not in s:
-              s = s.replace(marker, marker + ota_code, 1)
-          p.write_text(s, encoding='utf-8')
+          if '/api/filesystem-update' not in source:
+              source = source.replace(marker, marker + ota_code, 1)
+          path.write_text(source, encoding='utf-8')
           PY
 
       - name: Build firmware
@@ -135,9 +167,9 @@ jobs:
           build = Path('.pio/build/ttgo-lora32')
           required = ['firmware-image.bin', 'firmware.bin', 'littlefs.bin', 'fonts.bin']
           for name in required:
-              path = build / name
-              if not path.is_file() or path.stat().st_size == 0:
-                  raise SystemExit(f'Missing build file: {path}')
+              file = build / name
+              if not file.is_file() or file.stat().st_size == 0:
+                  raise SystemExit(f'Missing build file: {file}')
 
           version_text = Path('RX_FSK/version.h').read_text(encoding='utf-8')
           version_match = re.search(r'version_id\s*=\s*"([^"]+)"', version_text)
@@ -181,23 +213,15 @@ jobs:
               'name': 'Zondas TTGO LoRa32',
               'version': full_version,
               'new_install_prompt_erase': True,
-              'builds': [
-                  {
-                      'chipFamily': 'ESP32',
-                      'parts': [
-                          {
-                              'path': 'firmware-image.bin',
-                              'offset': 4096,
-                          }
-                      ],
-                  }
-              ],
+              'builds': [{
+                  'chipFamily': 'ESP32',
+                  'parts': [{'path': 'firmware-image.bin', 'offset': 4096}],
+              }],
           }
           (docs / 'manifest.json').write_text(
               json.dumps(web_manifest, ensure_ascii=False, indent=2) + '\n',
               encoding='utf-8'
           )
-
           (docs / 'update-info.html').write_text(
               f'<!doctype html><meta charset="utf-8"><b>Zondas firmware</b><br>Versija: {full_version}<br>Sukurta: {build_date}<br>',
               encoding='utf-8'
